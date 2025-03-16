@@ -1,0 +1,101 @@
+Parameters:
+  BucketName:
+    Type: String
+    Description: The name of the S3 bucket for static hosting
+    AllowedPattern: "^[a-z0-9.-]{3,63}$"
+    MinLength: 3
+    MaxLength: 63
+
+  CertificateArn:
+    Type: String
+    Description: The ARN of the ACM certificate for the CloudFront distribution
+
+Resources:
+  # S3 Bucket for Static Website
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+
+  # CloudFront Origin Access Identity (Legacy OAI)
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "OAI for ${BucketName}"
+
+  # S3 Bucket Policy (Automatically Grants CloudFront OAI Access)
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn:
+      - S3Bucket
+      - CloudFrontOriginAccessIdentity
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Aliases:
+          - !Ref BucketName
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only
+        Origins:
+          - Id: !Ref BucketName
+            DomainName: !GetAtt S3Bucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
+
+        DefaultCacheBehavior:
+          TargetOriginId: !Ref BucketName
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          FunctionAssociations:
+          - EventType: viewer-request
+            FunctionARN: arn:aws:cloudfront::416218852436:function/IndexRedirect
+
+        PriceClass: PriceClass_100
+
+Outputs:
+  CloudFrontURL:
+    Value: !Sub "${CloudFrontDistribution.DomainName}"
+    Description: "The CloudFront distribution URL for the static website"
+
+  CloudFrontID:
+    Value: !Sub "${CloudFrontDistribution.Id}"
+    Description: "The CloudFront distribution ID for the static website"
+
